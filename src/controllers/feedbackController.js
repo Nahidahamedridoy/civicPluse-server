@@ -3,7 +3,9 @@ import Feedback from "../models/Feedback.js";
 import Issue from "../models/Issue.js";
 import User from "../models/User.js";
 import ActivityLog from "../models/ActivityLog.js";
-import Notification from "../models/Notification.js";
+import {
+  createAndEmitMany,
+} from "../services/notificationService.js";
 import { canUserAccessIssue } from "./commentController.js";
 
 /**
@@ -108,7 +110,7 @@ export const submitFeedback = async (req, res) => {
     }));
 
     if (notifications.length > 0) {
-      await Notification.insertMany(notifications);
+      await createAndEmitMany(notifications);
     }
 
     const populatedFeedback = await Feedback.findById(feedback._id).populate(

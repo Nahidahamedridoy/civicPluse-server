@@ -1,7 +1,9 @@
 import mongoose from "mongoose";
 import Comment from "../models/Comment.js";
 import Issue from "../models/Issue.js";
-import Notification from "../models/Notification.js";
+import {
+  createAndEmitMany,
+} from "../services/notificationService.js";
 import ActivityLog from "../models/ActivityLog.js";
 
 /**
@@ -135,7 +137,7 @@ export const addComment = async (req, res) => {
     }
 
     if (notificationsToCreate.length > 0) {
-      await Notification.insertMany(notificationsToCreate);
+      await createAndEmitMany(notificationsToCreate);
     }
 
     return res.status(201).json({

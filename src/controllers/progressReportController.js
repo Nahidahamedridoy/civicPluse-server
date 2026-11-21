@@ -3,7 +3,9 @@ import ProgressReport from "../models/ProgressReport.js";
 import Issue from "../models/Issue.js";
 import User from "../models/User.js";
 import ActivityLog from "../models/ActivityLog.js";
-import Notification from "../models/Notification.js";
+import {
+  createAndEmitMany,
+} from "../services/notificationService.js";
 import { canUserAccessIssue } from "./commentController.js";
 import { uploadMultipleImages } from "../services/imageUploadService.js";
 
@@ -99,7 +101,7 @@ export const addProgressReport = async (req, res) => {
     }));
 
     if (notifications.length > 0) {
-      await Notification.insertMany(notifications);
+      await createAndEmitMany(notifications);
     }
 
     const populatedReport = await ProgressReport.findById(report._id).populate(

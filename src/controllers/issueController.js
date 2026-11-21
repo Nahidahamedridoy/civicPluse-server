@@ -3,7 +3,10 @@ import Issue from "../models/Issue.js";
 import Department from "../models/Department.js";
 import User from "../models/User.js";
 import ActivityLog from "../models/ActivityLog.js";
-import Notification from "../models/Notification.js";
+import {
+  createAndEmitNotification,
+  createAndEmitMany,
+} from "../services/notificationService.js";
 import ProgressReport from "../models/ProgressReport.js";
 import { uploadMultipleImages } from "../services/imageUploadService.js";
 
@@ -597,8 +600,8 @@ export const assignIssue = async (req, res) => {
       newStatus: issue.status,
     });
 
-    // Create Notification for the assigned staff
-    await Notification.create({
+    // Create & emit real-time notification for the assigned staff
+    await createAndEmitNotification({
       recipient: staff._id,
       title: "New Issue Assigned",
       message: `You have been assigned to handle issue: "${issue.title}".`,
@@ -720,8 +723,8 @@ export const verifyIssue = async (req, res) => {
       newStatus: "under_review",
     });
 
-    // Notify citizen reporter
-    await Notification.create({
+    // Notify citizen reporter (real-time)
+    await createAndEmitNotification({
       recipient: issue.reportedBy,
       title: "Issue Verified",
       message: `Your reported issue "${issue.title}" has been verified and placed under review.`,
@@ -902,8 +905,8 @@ export const updateIssueStatus = async (req, res) => {
       newStatus: status,
     });
 
-    // Notify the citizen reporter
-    await Notification.create({
+    // Notify the citizen reporter (real-time)
+    await createAndEmitNotification({
       recipient: issue.reportedBy,
       title: "Issue Status Updated",
       message: `Your issue "${issue.title}" status has changed to "${status}".`,

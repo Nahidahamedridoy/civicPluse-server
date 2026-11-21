@@ -1,5 +1,9 @@
 import { Router } from "express";
-import { getAnalytics } from "../controllers/analyticsController.js";
+import {
+  getAnalytics,
+  getDepartmentPerformance,
+  getStaffPerformance,
+} from "../controllers/analyticsController.js";
 import { authenticate } from "../middleware/auth.js";
 import { authorizeRoles } from "../middleware/authorize.js";
 
@@ -9,5 +13,7 @@ const router = Router();
 router.use(authenticate, authorizeRoles("admin", "department_manager"));
 
 router.get("/", getAnalytics);
+router.get("/department-performance", getDepartmentPerformance);
+router.get("/staff-performance", getStaffPerformance);
 
 export default router;
