@@ -1,5 +1,7 @@
 import mongoose from "mongoose";
 import Department from "../models/Department.js";
+import User from "../models/User.js";
+import Issue from "../models/Issue.js";
 
 /**
  * Create a new department.
@@ -317,10 +319,161 @@ export const deleteDepartment = async (req, res) => {
   }
 };
 
+/**
+ * Get maintenance staff workload for a department.
+ * Accessible to Admin and the relevant Department Manager.
+ *
+ * @route GET /api/departments/:id/workload
+ * @route GET /api/departments/workload
+ */
+export const getDepartmentWorkload = async (req, res) => {
+  try {
+    const deptId = req.params.id || req.user.department;
+
+    if (!deptId || !mongoose.Types.ObjectId.isValid(deptId)) {
+      return res.status(400).json({
+        success: false,
+        message: "A valid department ID is required.",
+      });
+    }
+
+    // Role check: Admin or the department manager of that department
+    if (req.user.role === "department_manager") {
+      if (
+        !req.user.department ||
+        req.user.department.toString() !== deptId.toString()
+      ) {
+        return res.status(403).json({
+          success: false,
+          message:
+            "Forbidden: You can only view workload for your own department.",
+        });
+      }
+    } else if (req.user.role !== "admin") {
+      return res.status(403).json({
+        success: false,
+        message:
+          "Forbidden: Only admins and department managers can access workload statistics.",
+      });
+    }
+
+    const department = await Department.findById(deptId);
+    if (!department) {
+      return res.status(404).json({
+        success: false,
+        message: "Department not found.",
+      });
+    }
+
+    const page = Math.max(1, parseInt(req.query?.page, 10) || 1);
+    const limit = Math.min(
+      100,
+      Math.max(1, parseInt(req.query?.limit, 10) || 10)
+    );
+    const skip = (page - 1) * limit;
+
+    // Fetch maintenance staff in this department
+    const staffQuery = {
+      department: deptId,
+      role: "maintenance_staff",
+      isActive: true,
+    };
+
+    const [staffList, totalStaff] = await Promise.all([
+      User.find(staffQuery)
+        .sort({ name: 1 })
+        .skip(skip)
+        .limit(limit)
+        .select("name email phone avatar role isActive"),
+      User.countDocuments(staffQuery),
+    ]);
+
+    // Aggregate issue statistics for these staff members
+    const staffIds = staffList.map((s) => s._id);
+
+    const issueStats = await Issue.aggregate([
+      { $match: { assignedTo: { $in: staffIds } } },
+      {
+        $group: {
+          _id: {
+            staffId: "$assignedTo",
+            status: "$status",
+          },
+          count: { $sum: 1 },
+        },
+      },
+    ]);
+
+    // Build stats lookup map
+    const statsMap = {};
+    staffIds.forEach((id) => {
+      statsMap[id.toString()] = {
+        assigned: 0,
+        inProgress: 0,
+        resolved: 0,
+        activeWorkload: 0,
+      };
+    });
+
+    issueStats.forEach((stat) => {
+      const staffIdStr = stat._id.staffId.toString();
+      const status = stat._id.status;
+      const count = stat.count;
+
+      if (statsMap[staffIdStr]) {
+        if (status === "assigned") {
+          statsMap[staffIdStr].assigned += count;
+          statsMap[staffIdStr].activeWorkload += count;
+        } else if (status === "in_progress") {
+          statsMap[staffIdStr].inProgress += count;
+          statsMap[staffIdStr].activeWorkload += count;
+        } else if (["resolved", "closed"].includes(status)) {
+          statsMap[staffIdStr].resolved += count;
+        }
+      }
+    });
+
+    const staffWorkload = staffList.map((staff) => {
+      const stats = statsMap[staff._id.toString()] || {
+        assigned: 0,
+        inProgress: 0,
+        resolved: 0,
+        activeWorkload: 0,
+      };
+      return {
+        staff,
+        ...stats,
+      };
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        department: {
+          _id: department._id,
+          name: department.name,
+          code: department.code,
+        },
+        staffWorkload,
+        totalStaff,
+        page,
+        totalPages: Math.ceil(totalStaff / limit) || 1,
+      },
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: "Failed to retrieve department team workload.",
+      error: error.message,
+    });
+  }
+};
+
 export default {
   createDepartment,
   getAllDepartments,
   getDepartmentById,
   updateDepartment,
   deleteDepartment,
+  getDepartmentWorkload,
 };

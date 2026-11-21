@@ -4,6 +4,7 @@ import Department from "../models/Department.js";
 import User from "../models/User.js";
 import ActivityLog from "../models/ActivityLog.js";
 import Notification from "../models/Notification.js";
+import ProgressReport from "../models/ProgressReport.js";
 import { uploadMultipleImages } from "../services/imageUploadService.js";
 
 // Valid status transitions map
@@ -445,9 +446,23 @@ export const updateIssue = async (req, res) => {
     if (location !== undefined) issue.location = location;
     if (images !== undefined && Array.isArray(images)) issue.images = images;
 
-    // Only admin or manager can modify priority directly
-    if (priority !== undefined && ["admin", "department_manager"].includes(req.user.role)) {
-      issue.priority = priority;
+    // Only admin or manager can modify priority or reassign department
+    if (["admin", "department_manager"].includes(req.user.role)) {
+      if (
+        priority !== undefined &&
+        ["low", "medium", "high", "urgent"].includes(priority)
+      ) {
+        issue.priority = priority;
+      }
+      if (department !== undefined && mongoose.Types.ObjectId.isValid(department)) {
+        const targetDept = await Department.findOne({
+          _id: department,
+          isActive: true,
+        });
+        if (targetDept) {
+          issue.department = targetDept._id;
+        }
+      }
     }
 
     await issue.save();
@@ -613,6 +628,129 @@ export const assignIssue = async (req, res) => {
 };
 
 /**
+ * Verify submitted issue.
+ * Department Managers and Admins can verify issues, and assign priority and department.
+ *
+ * @route PATCH /api/issues/:id/verify
+ */
+export const verifyIssue = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { priority, department, notes } = req.body || {};
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid issue ID format.",
+      });
+    }
+
+    // Role check: Only department managers and admins can verify issues
+    if (req.user.role !== "admin" && req.user.role !== "department_manager") {
+      return res.status(403).json({
+        success: false,
+        message:
+          "Forbidden: Only department managers and admins can verify issues.",
+      });
+    }
+
+    const issue = await Issue.findById(id);
+    if (!issue) {
+      return res.status(404).json({
+        success: false,
+        message: "Issue not found.",
+      });
+    }
+
+    // If department manager, ensure issue belongs to their department
+    if (req.user.role === "department_manager") {
+      if (
+        !req.user.department ||
+        issue.department.toString() !== req.user.department.toString()
+      ) {
+        return res.status(403).json({
+          success: false,
+          message:
+            "Forbidden: You can only verify issues belonging to your department.",
+        });
+      }
+    }
+
+    // Only submitted issues can be verified into under_review
+    if (issue.status !== "submitted") {
+      return res.status(400).json({
+        success: false,
+        message: `Issue is already '${issue.status}'. Only 'submitted' issues can be verified.`,
+      });
+    }
+
+    const previousStatus = issue.status;
+    issue.status = "under_review";
+
+    // Managers can assign priority and department
+    if (priority && ["low", "medium", "high", "urgent"].includes(priority)) {
+      issue.priority = priority;
+    }
+
+    if (department && mongoose.Types.ObjectId.isValid(department)) {
+      const targetDept = await Department.findOne({
+        _id: department,
+        isActive: true,
+      });
+      if (!targetDept) {
+        return res.status(404).json({
+          success: false,
+          message: "Active target department not found.",
+        });
+      }
+      issue.department = targetDept._id;
+    }
+
+    await issue.save();
+
+    // Record activity log
+    await ActivityLog.create({
+      issue: issue._id,
+      performedBy: req.user._id,
+      action: "verified",
+      description: notes
+        ? `Issue verified and placed under review: ${notes.trim()}`
+        : "Issue verified by department manager and placed under review.",
+      previousStatus,
+      newStatus: "under_review",
+    });
+
+    // Notify citizen reporter
+    await Notification.create({
+      recipient: issue.reportedBy,
+      title: "Issue Verified",
+      message: `Your reported issue "${issue.title}" has been verified and placed under review.`,
+      type: "status_updated",
+      relatedIssue: issue._id,
+    });
+
+    const populatedIssue = await Issue.findById(issue._id)
+      .populate("department", "name code")
+      .populate("reportedBy", "name email phone avatar")
+      .populate("assignedTo", "name email phone avatar");
+
+    return res.status(200).json({
+      success: true,
+      message: "Issue verified successfully.",
+      data: {
+        issue: populatedIssue,
+      },
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: "Failed to verify issue.",
+      error: error.message,
+    });
+  }
+};
+
+/**
  * Update issue status with transition validation.
  *
  * @route PATCH /api/issues/:id/status
@@ -620,7 +758,7 @@ export const assignIssue = async (req, res) => {
 export const updateIssueStatus = async (req, res) => {
   try {
     const { id } = req.params;
-    const { status, notes } = req.body;
+    const { status, notes } = req.body || {};
 
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({
@@ -654,35 +792,78 @@ export const updateIssueStatus = async (req, res) => {
     }
 
     // Role-based permissions for status updates
+    // 1. Citizens cannot change issue status
     if (req.user.role === "citizen") {
-      if (issue.reportedBy.toString() !== req.user._id.toString()) {
+      return res.status(403).json({
+        success: false,
+        message: "Forbidden: Citizens are not authorized to change issue status.",
+      });
+    }
+
+    // 2. Only authorized managers and admin can close resolved issues
+    if (status === "closed") {
+      if (!["admin", "department_manager"].includes(req.user.role)) {
         return res.status(403).json({
           success: false,
-          message: "Forbidden: You cannot change status of other users' issues.",
+          message:
+            "Forbidden: Only authorized department managers and admins can close issues.",
         });
       }
-      // Citizen can only close resolved issue
-      if (status !== "closed" || issue.status !== "resolved") {
-        return res.status(403).json({
+      if (req.user.role === "department_manager") {
+        if (
+          !req.user.department ||
+          issue.department.toString() !== req.user.department.toString()
+        ) {
+          return res.status(403).json({
+            success: false,
+            message:
+              "Forbidden: You can only close issues belonging to your department.",
+          });
+        }
+      }
+      if (issue.status !== "resolved" && req.user.role !== "admin") {
+        return res.status(400).json({
           success: false,
-          message: "Citizens can only close an issue once it has been resolved.",
+          message: "Only resolved issues can be closed.",
         });
       }
-    } else if (req.user.role === "maintenance_staff") {
-      if (!issue.assignedTo || issue.assignedTo.toString() !== req.user._id.toString()) {
+    }
+
+    // 3. Maintenance staff permissions & completion report requirement
+    if (req.user.role === "maintenance_staff") {
+      if (
+        !issue.assignedTo ||
+        issue.assignedTo.toString() !== req.user._id.toString()
+      ) {
         return res.status(403).json({
           success: false,
           message: "Forbidden: You can only update status for issues assigned to you.",
         });
       }
-      // Staff can transition to in_progress or resolved
       if (!["in_progress", "resolved"].includes(status)) {
         return res.status(403).json({
           success: false,
-          message: "Maintenance staff can only update status to 'in_progress' or 'resolved'.",
+          message:
+            "Maintenance staff can only update status to 'in_progress' or 'resolved'.",
         });
       }
-    } else if (req.user.role === "department_manager") {
+      if (status === "resolved") {
+        const hasReport = await ProgressReport.exists({
+          issue: issue._id,
+          staff: req.user._id,
+        });
+        if (!hasReport) {
+          return res.status(400).json({
+            success: false,
+            message:
+              "Cannot mark issue as resolved without submitting a work progress/completion report first.",
+          });
+        }
+      }
+    }
+
+    // 4. Department Manager scope
+    if (req.user.role === "department_manager") {
       if (
         !req.user.department ||
         issue.department.toString() !== req.user.department.toString()
@@ -758,6 +939,7 @@ export default {
   getAssignedIssues,
   getIssueById,
   updateIssue,
+  verifyIssue,
   assignIssue,
   updateIssueStatus,
 };

@@ -100,3 +100,4 @@ export default {
   uploadImage,
   uploadMultipleImages,
 };
+
