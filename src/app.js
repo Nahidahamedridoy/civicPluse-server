@@ -1,4 +1,3 @@
-
 import express from "express";
 import cors from "cors";
 import helmet from "helmet";
@@ -15,6 +14,8 @@ import adminRoutes from "./routes/adminRoutes.js";
 import dashboardRoutes from "./routes/dashboardRoutes.js";
 import analyticsRoutes from "./routes/analyticsRoutes.js";
 
+import { errorHandler, notFoundHandler } from "./middleware/errorHandler.js";
+
 const app = express();
 
 // Security Headers
@@ -28,7 +29,7 @@ app.use(
   })
 );
 
-// Request Body Parser
+// Request Body Parsers
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -58,13 +59,17 @@ app.use("/api/auth", authRoutes);
 app.use("/api/users", userRoutes);
 app.use("/api/departments", departmentRoutes);
 app.use("/api/issues", issueRoutes);
-app.use("/api/notifications", notificationRoutes);
 app.use("/api/comments", commentRoutes);
+app.use("/api/notifications", notificationRoutes);
 app.use("/api/activity-logs", activityLogRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/analytics", analyticsRoutes);
-app.use("/api", commentRoutes);
-app.use("/api", activityLogRoutes);
+
+// 404 Handler for undefined API routes
+app.use(notFoundHandler);
+
+// Global Error Handler
+app.use(errorHandler);
 
 export default app;

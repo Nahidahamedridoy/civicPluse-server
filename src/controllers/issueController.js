@@ -4,6 +4,7 @@ import Department from "../models/Department.js";
 import User from "../models/User.js";
 import ActivityLog from "../models/ActivityLog.js";
 import Notification from "../models/Notification.js";
+import { uploadMultipleImages } from "../services/imageUploadService.js";
 
 // Valid status transitions map
 const ALLOWED_STATUS_TRANSITIONS = {
@@ -66,6 +67,24 @@ export const createIssue = async (req, res) => {
       });
     }
 
+    // Process uploaded images via Multer/ImgBB or direct image URLs
+    let issueImages = [];
+    if (req.files && Array.isArray(req.files) && req.files.length > 0) {
+      issueImages = await uploadMultipleImages(req.files);
+    } else if (Array.isArray(images)) {
+      issueImages = images;
+    }
+
+    // Parse location if submitted via multipart/form-data as JSON string
+    let parsedLocation = location;
+    if (typeof location === "string" && location.trim().startsWith("{")) {
+      try {
+        parsedLocation = JSON.parse(location);
+      } catch (e) {
+        parsedLocation = null;
+      }
+    }
+
     const newIssue = await Issue.create({
       title: title.trim(),
       description: description.trim(),
@@ -75,8 +94,8 @@ export const createIssue = async (req, res) => {
       assignedTo: null,
       status: "submitted",
       priority: priority || "medium",
-      location: location || null,
-      images: Array.isArray(images) ? images : [],
+      location: parsedLocation || null,
+      images: issueImages,
     });
 
     // Record activity log

@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { getProfile, updateProfile } from "../controllers/userController.js";
 import { authenticate } from "../middleware/auth.js";
+import { uploadSingleImage } from "../middleware/upload.js";
 
 const router = Router();
 
@@ -8,6 +9,6 @@ const router = Router();
 router.use(authenticate);
 
 router.get("/profile", getProfile);
-router.patch("/profile", updateProfile);
+router.patch("/profile", uploadSingleImage, updateProfile);
 
 export default router;

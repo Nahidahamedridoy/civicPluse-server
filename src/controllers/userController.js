@@ -1,4 +1,5 @@
 import User from "../models/User.js";
+import { uploadImage } from "../services/imageUploadService.js";
 
 /**
  * Get current authenticated user's profile.
@@ -61,7 +62,9 @@ export const updateProfile = async (req, res) => {
       updates.phone = typeof phone === "string" ? phone.trim() : phone;
     }
 
-    if (avatar !== undefined) {
+    if (req.file) {
+      updates.avatar = await uploadImage(req.file);
+    } else if (avatar !== undefined) {
       updates.avatar = typeof avatar === "string" ? avatar.trim() : avatar;
     }
 

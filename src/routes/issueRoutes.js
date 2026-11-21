@@ -14,6 +14,7 @@ import {
   getCommentsByIssue,
 } from "../controllers/commentController.js";
 import { getActivityLogsByIssue } from "../controllers/activityLogController.js";
+import { uploadIssueImages } from "../middleware/upload.js";
 import { authenticate } from "../middleware/auth.js";
 import { authorizeRoles } from "../middleware/authorize.js";
 
@@ -26,8 +27,8 @@ router.use(authenticate);
 router.get("/my-reports", authorizeRoles("citizen"), getMyReports);
 router.get("/assigned", authorizeRoles("maintenance_staff"), getAssignedIssues);
 
-// General list and create
-router.post("/", authorizeRoles("citizen"), createIssue);
+// General list and create (supports up to 5 multipart images via uploadIssueImages)
+router.post("/", authorizeRoles("citizen"), uploadIssueImages, createIssue);
 router.get("/", getIssues);
 
 // Param-based operations
