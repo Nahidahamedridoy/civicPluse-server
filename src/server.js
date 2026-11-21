@@ -9,7 +9,7 @@ const startServer = async () => {
   await connectDB();
 
   app.listen(PORT, () => {
-    console.log("--------------------------------");
+    console.log("----------console.log------------------");
     console.log("       CIVICPULSE SERVER");
     console.log("--------------------------------");
     console.log(`Server: http://localhost:${PORT}`);
