@@ -9,6 +9,7 @@ import {
   verifyIssue,
   assignIssue,
   updateIssueStatus,
+  checkDuplicateIssues,
 } from "../controllers/issueController.js";
 import {
   addComment,
@@ -35,6 +36,7 @@ router.use(authenticate);
 // Specific GET routes before param route
 router.get("/my-reports", authorizeRoles("citizen"), getMyReports);
 router.get("/assigned", authorizeRoles("maintenance_staff"), getAssignedIssues);
+router.get("/check-duplicates", checkDuplicateIssues);
 
 // General list and create (supports up to 5 multipart images via uploadIssueImages)
 router.post("/", authorizeRoles("citizen"), uploadIssueImages, createIssue);

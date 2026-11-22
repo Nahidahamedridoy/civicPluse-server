@@ -13,6 +13,7 @@ import activityLogRoutes from "./routes/activityLogRoutes.js";
 import adminRoutes from "./routes/adminRoutes.js";
 import dashboardRoutes from "./routes/dashboardRoutes.js";
 import analyticsRoutes from "./routes/analyticsRoutes.js";
+import mapRoutes from "./routes/mapRoutes.js";
 
 import { errorHandler, notFoundHandler } from "./middleware/errorHandler.js";
 
@@ -65,6 +66,7 @@ app.use("/api/activity-logs", activityLogRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/analytics", analyticsRoutes);
+app.use("/api/map", mapRoutes);
 
 // 404 Handler for undefined API routes
 app.use(notFoundHandler);

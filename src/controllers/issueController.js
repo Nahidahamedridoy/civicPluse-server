@@ -89,6 +89,17 @@ export const createIssue = async (req, res) => {
       }
     }
 
+    if (
+      parsedLocation &&
+      parsedLocation.latitude != null &&
+      parsedLocation.longitude != null
+    ) {
+      parsedLocation.coordinates = [
+        Number(parsedLocation.longitude),
+        Number(parsedLocation.latitude),
+      ];
+    }
+
     const newIssue = await Issue.create({
       title: title.trim(),
       description: description.trim(),
@@ -935,6 +946,284 @@ export const updateIssueStatus = async (req, res) => {
   }
 };
 
+/**
+ * Helper: Calculate Haversine Distance in meters between two lat/lng pairs.
+ */
+const calculateHaversineMeters = (lat1, lon1, lat2, lon2) => {
+  const toRad = (deg) => (deg * Math.PI) / 180;
+  const R = 6371000; // Earth radius in meters
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRad(lat1)) *
+      Math.cos(toRad(lat2)) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+};
+
+const STOP_WORDS = new Set([
+  "a", "an", "the", "and", "or", "in", "on", "at", "to", "for", "with",
+  "by", "of", "from", "is", "are", "was", "were", "it", "this", "that",
+  "there", "has", "have", "had", "near", "road", "street", "issue"
+]);
+
+const extractKeywords = (str) => {
+  if (!str || typeof str !== "string") return [];
+  return str
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .split(/\s+/)
+    .filter((w) => w.length >= 3 && !STOP_WORDS.has(w));
+};
+
+/**
+ * Check for duplicate or similar existing issues.
+ * Accepts title, category, latitude, longitude, and optional radius.
+ * Does not delete, modify, or merge any records.
+ *
+ * @route GET /api/issues/check-duplicates
+ */
+export const checkDuplicateIssues = async (req, res) => {
+  try {
+    const { title, category, latitude, longitude, radius, department } = req.query || {};
+
+    if (!title || typeof title !== "string" || title.trim().length < 3) {
+      return res.status(400).json({
+        success: false,
+        message: "Title query parameter is required and must be at least 3 characters long.",
+      });
+    }
+
+    let hasCoords = false;
+    let lat = null;
+    let lng = null;
+
+    if (
+      (latitude !== undefined && latitude !== null && latitude !== "") ||
+      (longitude !== undefined && longitude !== null && longitude !== "")
+    ) {
+      lat = Number(latitude);
+      lng = Number(longitude);
+
+      if (isNaN(lat) || lat < -90 || lat > 90) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid latitude. Must be a number between -90 and 90.",
+        });
+      }
+
+      if (isNaN(lng) || lng < -180 || lng > 180) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid longitude. Must be a number between -180 and 180.",
+        });
+      }
+      hasCoords = true;
+    }
+
+    let searchRadiusMeters = 1000; // default 1 km
+    if (radius !== undefined && radius !== null && radius !== "") {
+      const radiusNum = Number(radius);
+      if (isNaN(radiusNum) || radiusNum <= 0) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid radius. Must be a positive number.",
+        });
+      }
+      searchRadiusMeters = radiusNum > 100 ? radiusNum : radiusNum * 1000;
+    }
+
+    const trimmedTitle = title.trim();
+    const queryTokens = extractKeywords(trimmedTitle);
+
+    // Build candidate match filter
+    const candidateFilter = {};
+    if (department && mongoose.Types.ObjectId.isValid(department)) {
+      candidateFilter.department = new mongoose.Types.ObjectId(department);
+    }
+
+    // Retrieve candidate issues
+    let candidates = [];
+    if (hasCoords) {
+      try {
+        candidates = await Issue.aggregate([
+          {
+            $geoNear: {
+              near: { type: "Point", coordinates: [lng, lat] },
+              distanceField: "distanceMeters",
+              maxDistance: searchRadiusMeters * 3,
+              spherical: true,
+              query: candidateFilter,
+            },
+          },
+          { $limit: 50 },
+        ]);
+      } catch (err) {
+        candidates = await Issue.find(candidateFilter).limit(100).lean();
+      }
+    } else {
+      candidates = await Issue.find(candidateFilter).limit(100).lean();
+    }
+
+    if (candidates.length < 10) {
+      const existingIds = new Set(candidates.map((c) => c._id.toString()));
+      const textMatches = await Issue.find({
+        ...candidateFilter,
+        _id: { $nin: Array.from(existingIds) },
+        $or: [
+          ...(category ? [{ category: new RegExp(`^${category.trim()}$`, "i") }] : []),
+          ...(queryTokens.length > 0
+            ? [{ title: new RegExp(queryTokens.join("|"), "i") }]
+            : []),
+        ],
+      })
+        .limit(30)
+        .lean();
+
+      candidates.push(...textMatches);
+    }
+
+    // Populate department info for candidates
+    const deptIds = [...new Set(candidates.map((c) => c.department?.toString()).filter(Boolean))];
+    const departments = await Department.find({ _id: { $in: deptIds } }, "name code").lean();
+    const deptMap = Object.fromEntries(departments.map((d) => [d._id.toString(), d]));
+
+    // Evaluate similarity for each candidate
+    const potentialDuplicates = [];
+
+    for (const cand of candidates) {
+      let distanceMeters = cand.distanceMeters !== undefined ? cand.distanceMeters : null;
+
+      if (
+        distanceMeters === null &&
+        hasCoords &&
+        cand.location?.latitude != null &&
+        cand.location?.longitude != null
+      ) {
+        distanceMeters = Math.round(
+          calculateHaversineMeters(
+            lat,
+            lng,
+            cand.location.latitude,
+            cand.location.longitude
+          )
+        );
+      }
+
+      const candTokens = extractKeywords(cand.title);
+      const commonTokens = queryTokens.filter((t) => candTokens.includes(t));
+
+      // Calculate component scores
+      let textScore = 0;
+      if (queryTokens.length > 0) {
+        const overlapRatio = commonTokens.length / queryTokens.length;
+        textScore = overlapRatio * 50;
+      }
+      if (
+        cand.title.toLowerCase().includes(trimmedTitle.toLowerCase()) ||
+        trimmedTitle.toLowerCase().includes(cand.title.toLowerCase())
+      ) {
+        textScore = Math.max(textScore, 45);
+      }
+
+      let categoryScore = 0;
+      if (
+        category &&
+        cand.category &&
+        category.trim().toLowerCase() === cand.category.trim().toLowerCase()
+      ) {
+        categoryScore = 25;
+      }
+
+      let proximityScore = 0;
+      if (distanceMeters !== null) {
+        if (distanceMeters <= 50) proximityScore = 25;
+        else if (distanceMeters <= 200) proximityScore = 20;
+        else if (distanceMeters <= 500) proximityScore = 15;
+        else if (distanceMeters <= 1000) proximityScore = 10;
+        else if (distanceMeters <= searchRadiusMeters) proximityScore = 5;
+      } else if (!hasCoords) {
+        textScore = Math.min(70, textScore * 1.4);
+        categoryScore = Math.min(30, categoryScore * 1.2);
+      }
+
+      const totalScore = Math.min(100, Math.round(textScore + categoryScore + proximityScore));
+
+      const reasons = [];
+      if (distanceMeters !== null && distanceMeters <= searchRadiusMeters) {
+        reasons.push(
+          distanceMeters < 10
+            ? "Located at virtually identical coordinates"
+            : `Located ${Math.round(distanceMeters)}m from provided coordinates`
+        );
+      }
+      if (categoryScore > 0) {
+        reasons.push(`Matching category: "${cand.category}"`);
+      }
+      if (commonTokens.length > 0) {
+        reasons.push(`Shares title keywords: "${commonTokens.join('", "')}"`);
+      }
+      if (["submitted", "under_review", "assigned", "in_progress"].includes(cand.status)) {
+        reasons.push(`Active issue currently in '${cand.status}' status`);
+      }
+
+      if (
+        totalScore >= 30 ||
+        commonTokens.length >= 2 ||
+        (distanceMeters !== null && distanceMeters <= 100 && categoryScore > 0)
+      ) {
+        const confidence =
+          totalScore >= 70 ? "high" : totalScore >= 45 ? "medium" : "low";
+
+        potentialDuplicates.push({
+          issue: {
+            _id: cand._id,
+            title: cand.title,
+            description: cand.description,
+            category: cand.category,
+            status: cand.status,
+            priority: cand.priority,
+            location: cand.location,
+            department: deptMap[cand.department?.toString()] || null,
+            createdAt: cand.createdAt,
+          },
+          similarityScore: totalScore,
+          confidence,
+          distanceMeters: distanceMeters !== null ? Math.round(distanceMeters) : null,
+          distanceKm: distanceMeters !== null ? Number((distanceMeters / 1000).toFixed(2)) : null,
+          reasons,
+        });
+      }
+    }
+
+    // Sort by highest similarity score first
+    potentialDuplicates.sort((a, b) => b.similarityScore - a.similarityScore);
+
+    return res.status(200).json({
+      success: true,
+      count: potentialDuplicates.length,
+      data: {
+        query: {
+          title: trimmedTitle,
+          category: category ? category.trim() : null,
+          location: hasCoords ? { latitude: lat, longitude: lng } : null,
+          searchRadiusMeters: hasCoords ? searchRadiusMeters : null,
+        },
+        potentialDuplicates: potentialDuplicates.slice(0, 20),
+      },
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: "Failed to check for duplicate issues.",
+      error: error.message,
+    });
+  }
+};
+
 export default {
   createIssue,
   getIssues,
@@ -945,4 +1234,5 @@ export default {
   verifyIssue,
   assignIssue,
   updateIssueStatus,
+  checkDuplicateIssues,
 };

@@ -19,6 +19,10 @@ const locationSchema = new mongoose.Schema(
       max: [180, "Longitude must be between -180 and 180"],
       default: null,
     },
+    coordinates: {
+      type: [Number], // [longitude, latitude] for geospatial 2dsphere queries
+      default: undefined,
+    },
   },
   { _id: false }
 );
@@ -96,6 +100,21 @@ const issueSchema = new mongoose.Schema(
   }
 );
 
+// Automatically sync coordinates from latitude & longitude
+issueSchema.pre("save", function (next) {
+  if (
+    this.location &&
+    this.location.latitude != null &&
+    this.location.longitude != null
+  ) {
+    this.location.coordinates = [
+      Number(this.location.longitude),
+      Number(this.location.latitude),
+    ];
+  }
+  next();
+});
+
 // Indexes for searching and filtering
 issueSchema.index({ status: 1, priority: 1 });
 issueSchema.index({ department: 1, status: 1 });
@@ -104,6 +123,7 @@ issueSchema.index({ assignedTo: 1, status: 1 });
 issueSchema.index({ category: 1 });
 issueSchema.index({ createdAt: -1 });
 issueSchema.index({ title: "text", description: "text" });
+issueSchema.index({ "location.coordinates": "2dsphere" });
 
 const Issue = mongoose.model("Issue", issueSchema);
 

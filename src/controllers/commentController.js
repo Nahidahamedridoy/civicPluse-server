@@ -46,7 +46,7 @@ export const canUserAccessIssue = (user, issue) => {
  */
 export const addComment = async (req, res) => {
   try {
-    const { issueId } = req.params;
+    const issueId = req.params.id || req.params.issueId;
     const { message } = req.body;
 
     if (!mongoose.Types.ObjectId.isValid(issueId)) {
@@ -163,7 +163,7 @@ export const addComment = async (req, res) => {
  */
 export const getCommentsByIssue = async (req, res) => {
   try {
-    const { issueId } = req.params;
+    const issueId = req.params.id || req.params.issueId;
     const page = Math.max(1, parseInt(req.query?.page, 10) || 1);
     const limit = Math.min(100, Math.max(1, parseInt(req.query?.limit, 10) || 20));
     const skip = (page - 1) * limit;
