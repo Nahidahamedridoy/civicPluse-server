@@ -112,7 +112,9 @@ issueSchema.pre("save", function (next) {
       Number(this.location.latitude),
     ];
   }
-  next();
+  if (typeof next === "function") {
+    next();
+  }
 });
 
 // Indexes for searching and filtering
